@@ -73,13 +73,41 @@ except KeyError as e:
 # 3. 满血版核心数据引擎 (含技术指标与Day1数据)
 # ==========================================
 def search_ticker(query):
-    if not query or not EODHD_API_KEY: return[]
-    url = f"https://eodhd.com/api/search/{query}?api_token={EODHD_API_KEY}&fmt=json"
+    """增强版模糊搜索与精确直达"""
+    if not query or not EODHD_API_KEY: return []
+    
+    results =[]
+    
+    # 1. 允许精确直连 (Override)：如果用户输入了带后缀的代码（如 7203.T）
+    # 直接作为第一选项强制压入。哪怕搜索 API 没搜到，也能直接抓取数据！
+    if '.' in query:
+        clean_query = query.upper().strip()
+        results.append(f"{clean_query} | [精确输入直达/Direct Override]")
+        
+    # 2. 优化搜索词：EODHD 对带点号的搜索支持不好
+    # 我们自动剥离后缀（如 1605.t -> 1605），让它返回全球所有叫 1605 的标的
+    base_query = query.split('.')[0] if '.' in query else query
+    base_query = base_query.strip()
+    
+    url = f"https://eodhd.com/api/search/{base_query}?api_token={EODHD_API_KEY}&fmt=json"
     try:
         res = requests.get(url, timeout=5).json()
-        return [f"{item['Code']}.{item['Exchange']} | {item['Name']} ({item['Type']})" for item in res[:8]]
-    except: return[]
-
+        
+        # 3. 扩大展示数量到 15 个，防止需要的市场代码被折叠
+        for item in res[:15]:
+            # 兼容处理有时 API 缺少 Type 字段的情况
+            asset_type = item.get('Type', 'Unknown')
+            code_str = f"{item['Code']}.{item['Exchange']} | {item['Name']} ({asset_type})"
+            
+            # 去重：防止 API 搜到的和我们强制压入的第一项重复
+            if code_str not in results:
+                results.append(code_str)
+                
+    except Exception as e:
+        print(f"搜索 API 异常: {e}")
+        pass
+        
+    return results
 def fetch_latest_news(ticker_code):
     """【新增】抓取最新5条新闻作为 Day1 的催化剂补充"""
     url = f"https://eodhd.com/api/news?s={ticker_code}&api_token={EODHD_API_KEY}&limit=5&fmt=json"
