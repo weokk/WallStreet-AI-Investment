@@ -8,7 +8,7 @@ from openai import OpenAI
 # ==========================================
 # 1. 页面配置与 CSS 样式
 # ==========================================
-st.set_page_config(page_title="Super Committee AI V1 (Max Data)", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Super Committee AI (Max Data + Day1)", layout="wide", page_icon="🏦")
 
 st.markdown("""
     <style>
@@ -29,6 +29,7 @@ st.markdown("""
         border: 1px solid #ffcdd2;
     }
     .expert-title { color: #1565C0; margin-bottom: 10px; border-bottom: 2px solid #e3f2fd; padding-bottom: 5px; }
+    .day1-title { color: #2e7d32; margin-bottom: 10px; border-bottom: 2px solid #c8e6c9; padding-bottom: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -41,7 +42,7 @@ def check_password():
         return True
 
     st.title("🔒 访问受限")
-    st.info("此应用已开启满血版数据引擎，每次查询消耗量较大，请输入访问密码。")
+    st.info("此应用已开启满血版数据引擎及 Day1 深度框架，每次查询消耗量较大，请输入访问密码。")
     password_input = st.text_input("请输入访问密码", type="password")
     
     correct_password = st.secrets.get("APP_PASSWORD", "admin")
@@ -57,7 +58,6 @@ def check_password():
 if not check_password():
     st.stop()
 
-# 读取 API Key (从 Streamlit Secrets 读取)
 try:
     EODHD_API_KEY = st.secrets["EODHD_API_KEY"]
     DEEPSEEK_API_KEY = st.secrets["DEEPSEEK_API_KEY"]
@@ -70,10 +70,9 @@ except KeyError as e:
     st.stop()
 
 # ==========================================
-# 3. 满血版核心数据引擎 (含技术指标加拨)
+# 3. 满血版核心数据引擎 (含技术指标与Day1数据)
 # ==========================================
 def search_ticker(query):
-    """模糊搜索"""
     if not query or not EODHD_API_KEY: return[]
     url = f"https://eodhd.com/api/search/{query}?api_token={EODHD_API_KEY}&fmt=json"
     try:
@@ -81,10 +80,17 @@ def search_ticker(query):
         return [f"{item['Code']}.{item['Exchange']} | {item['Name']} ({item['Type']})" for item in res[:8]]
     except: return[]
 
-def fetch_comprehensive_data(ticker_code):
-    """满血全量数据抓取：包含基础面、历史财报与深度技术指标"""
+def fetch_latest_news(ticker_code):
+    """【新增】抓取最新5条新闻作为 Day1 的催化剂补充"""
+    url = f"https://eodhd.com/api/news?s={ticker_code}&api_token={EODHD_API_KEY}&limit=5&fmt=json"
     try:
-        # 1. 抓取全量基本面 (消耗 1 API 请求)
+        res = requests.get(url, timeout=5).json()
+        return[{"Date": item['date'][:10], "Title": item['title']} for item in res]
+    except: return[]
+
+def fetch_comprehensive_data(ticker_code):
+    """满血全量数据抓取：包含基础面、历史财报、技术指标与新闻"""
+    try:
         url_fund = f"https://eodhd.com/api/fundamentals/{ticker_code}?api_token={EODHD_API_KEY}&fmt=json"
         res = requests.get(url_fund, timeout=15).json()
         
@@ -94,61 +100,62 @@ def fetch_comprehensive_data(ticker_code):
         t = res.get('Technicals') or {}
         
         asset_type = g.get('Type', 'Common Stock')
+        currency = g.get('CurrencyCode', 'USD') # 【新增】全局货币修正
         
-        # 2. 【新增】额外调用技术指标 API (消耗 2 API 请求，喂给 Citadel)
-        latest_rsi = "N/A"
-        latest_macd = "N/A"
+        # 【新增】计算 Rule of 40 (营收增长率 + 营业利润率)
+        rev_growth = h.get('RevenueGrowthYoY') or 0
+        op_margin = h.get('OperatingMarginTTM') or 0
+        rule_of_40 = round((rev_growth + op_margin) * 100, 2)
+
+        # 获取技术指标 (RSI / MACD)
+        latest_rsi, latest_macd = "N/A", "N/A"
         if asset_type in['Common Stock', 'ETF']:
             try:
-                # RSI 14日
                 url_rsi = f"https://eodhd.com/api/technical/{ticker_code}?function=rsi&period=14&api_token={EODHD_API_KEY}&fmt=json"
                 rsi_data = requests.get(url_rsi, timeout=5).json()
                 if rsi_data and isinstance(rsi_data, list): latest_rsi = round(rsi_data[-1].get('rsi', 0), 2)
                 
-                # MACD
                 url_macd = f"https://eodhd.com/api/technical/{ticker_code}?function=macd&api_token={EODHD_API_KEY}&fmt=json"
                 macd_data = requests.get(url_macd, timeout=5).json()
                 if macd_data and isinstance(macd_data, list): 
                     latest_macd = {
                         "MACD_Value": round(macd_data[-1].get('macd', 0), 4),
-                        "Signal_Line": round(macd_data[-1].get('signal', 0), 4),
-                        "Divergence": round(macd_data[-1].get('divergence', 0), 4)
+                        "Signal_Line": round(macd_data[-1].get('signal', 0), 4)
                     }
-            except Exception as tech_e:
-                print(f"技术指标获取失败: {tech_e}")
+            except: pass
 
         packet = {
             "Meta": {
                 "Asset_Type": asset_type,
+                "Currency": currency,  # <--- 加入货币单位
                 "Sector": g.get('Sector'), 
                 "Industry": g.get('Industry'),
                 "Description": g.get('Description', '')[:400]
             },
             "Valuation_&_Profitability": {
                 "PE": v.get('TrailingPE'), "Forward_PE": v.get('ForwardPE'),
-                "ROE": h.get('ReturnOnEquityTTM'), "Operating_Margin": h.get('OperatingMarginTTM')
+                "PB": v.get('PriceBookMRQ'), "EV_EBITDA": v.get('EnterpriseValueEbitda'), # <--- Day1 需要
+                "ROE": h.get('ReturnOnEquityTTM'), "Operating_Margin": op_margin,
+                "Rule_of_40_Score": rule_of_40  # <--- Day1 科技股分析需要
             },
             "Technicals_&_Risk": {
                 "Beta": t.get('Beta'), "50_Day_MA": t.get('50DayMA'), 
                 "200_Day_MA": t.get('200DayMA'), "52W_High": t.get('52WeekHigh'),
                 "Short_Ratio": t.get('ShortRatio'),
-                "RSI_14Day": latest_rsi,       # <--- Citadel 狂喜
-                "MACD_Latest": latest_macd     # <--- Citadel 狂喜
+                "RSI_14Day": latest_rsi,       
+                "MACD_Latest": latest_macd     
             }
         }
 
-        # ETF 专属数据
         if asset_type in['ETF', 'Fund', 'Mutual Fund']:
             etf_data = res.get('ETF_Data') or {}
             top_10 = etf_data.get('Top_10_Holdings') or {}
             packet["ETF_Specifics"] = {
                 "Expense_Ratio": etf_data.get('NetExpenseRatio'),
                 "Yield": etf_data.get('Yield'),
-                "Top_5_Holdings": {k: v.get('Assets_%') for k, v in list(top_10.items())[:5]} if top_10 else "N/A",
-                "Asset_Allocation": etf_data.get('Asset_Allocation')
+                "Top_5_Holdings": {k: v.get('Assets_%') for k, v in list(top_10.items())[:5]} if top_10 else "N/A"
             }
             
-        # 股票专属深度数据
         elif asset_type == 'Common Stock':
             earnings_history = (res.get('Earnings') or {}).get('History') or {}
             recent_earnings = dict(list(earnings_history.items())[:4]) if isinstance(earnings_history, dict) else "N/A"
@@ -162,8 +169,7 @@ def fetch_comprehensive_data(ticker_code):
 
             income_stmt = (res.get('Financials') or {}).get('Income_Statement') or {}
             yearly_income = income_stmt.get('yearly') or {}
-            rev_5yr = {}
-            rnd_5yr = {}
+            rev_5yr, rnd_5yr = {}, {}
             for k, v in list(yearly_income.items())[:5]: 
                 rev_5yr[k] = v.get('totalRevenue')
                 rnd_5yr[k] = v.get('researchDevelopment')
@@ -176,19 +182,21 @@ def fetch_comprehensive_data(ticker_code):
                 "Dividend_Payout_Ratio": h.get('DividendShare'),
                 "Institutional_Percent": s.get('InstitutionsPercent'),
                 "Insider_Percent": s.get('InsiderPercent'),
-                "Free_Cash_Flow_History_3Y": recent_fcf,             # <--- 大摩狂喜
-                "Revenue_History_5Y": rev_5yr,                       # <--- 高盛狂喜
-                "R&D_Expense_History_5Y": rnd_5yr,                   # <--- 贝恩/费雪狂喜
-                "Earnings_Beat_Miss_Last_4Q": recent_earnings,       # <--- 小摩狂喜
-                "Forward_Consensus_Estimates": forward_estimates     # <--- 小摩狂喜
+                "Free_Cash_Flow_History_3Y": recent_fcf,             
+                "Revenue_History_5Y": rev_5yr,                       
+                "R&D_Expense_History_5Y": rnd_5yr,                   
+                "Earnings_Beat_Miss_Last_4Q": recent_earnings,       
+                "Forward_Consensus_Estimates": forward_estimates     
             }
+            # 【新增】抓取新闻给 Day1 做催化剂
+            packet["Recent_News_Catalysts"] = fetch_latest_news(ticker_code)
             
         return packet
     except Exception as e:
         return None
 
 # ==========================================
-# 4. 全明星专家 Prompt 库 (硬核原版无删减)
+# 4. 全明星与 Day1 Prompt 库
 # ==========================================
 def get_expert_prompts():
     return {
@@ -207,144 +215,106 @@ def get_expert_prompts():
             "Ben Graham (格雷厄姆)": "纯粹的量化价值分析。极度保守，严格看重市净率(PB)、低市盈率(PE)和净流动资产，必须有绝对安全边际。"
         },
         "投资专家组": {
-            "Goldman Sachs (高盛高级分析师)": """You are a senior equity analyst at Goldman Sachs with 20 years of experience. Analyze and provide:
-- P/E ratio analysis compared to sector averages
-- Revenue growth trends over the last 5 years
-- Debt-to-equity health check
-- Dividend yield and payout sustainability score
-- Competitive moat rating (weak, moderate, strong)
-- Bull case and bear case price targets for 12 months
-- Risk rating on a scale of 1-10 with clear reasoning
-- Entry price zones and stop-loss suggestions""",
-            
-            "Morgan Stanley (大摩DCF估值VP)": """You are a VP-level investment banker at Morgan Stanley. Build a full DCF perspective:
-- Revenue projection with growth assumptions
-- Operating margin estimates based on historical trends
-- Free cash flow calculations year by year (use provided FCF data)
-- Weighted average cost of capital (WACC) estimate based on Beta
-- Clear verdict: undervalued, fairly valued, or overvalued
-- Key assumptions that could break the model""",
-
-            "Bridgewater (桥水资深风险官)": """You are a senior risk analyst at Bridgewater Associates. Evaluate:
-- Sector concentration risk
-- Interest rate sensitivity for this position (analyze Beta and Debt)
-- Recession stress test showing estimated drawdown
-- Liquidity risk rating
-- Tail risk scenarios with probability estimates
-- Hedging strategies to reduce top risks""",
-
-            "JPMorgan (小摩财报策略师)": """You are a senior equity research analyst at JPMorgan Chase. Deliver an earnings analysis:
-- Last 4 quarters earnings vs estimates (beat or miss history)
-- Key metrics Wall Street is watching (Forward Consensus)
-- Segment-by-segment revenue breakdown trends
-- Options market implied move for earnings day
-- Bull case scenario and price impact estimate
-- Bear case scenario and downside risk estimate
-- My recommended play: buy, sell, or wait""",
-
-            "BlackRock (贝莱德多资产策略师)": """You are a senior portfolio strategist at BlackRock managing multi-asset portfolios. Create:
-- Exact asset allocation perspective
-- Core holdings vs satellite positions clearly labeled
-- Expected annual return range based on historical data
-- Expected maximum drawdown in a bad year
-- Rebalancing schedule and trigger rules""",
-
-            "Citadel (城堡高级量化交易员)": """You are a senior quantitative trader at Citadel who combines technical analysis with statistical models. Analyze:
-- Current trend direction
-- Key support and resistance levels based on 52W High/Low
-- Moving average analysis (50-day, 200-day) and crossover signals
-- RSI, MACD readings interpretation (Use the provided exact RSI and MACD data)
-- Ideal entry price, stop-loss level, and profit target
-- Risk-to-reward ratio for the current setup
-- Confidence rating: strong buy, buy, neutral, sell, strong sell""",
-
-            "Harvard (哈佛捐赠基金策略师)": """You are the chief investment strategist for Harvard's endowment fund. Build a dividend perspective:
-- Dividend yield and safety score (1-10 scale)
-- Payout ratio analysis to flag any unsustainable dividends
-- Monthly income projection potential
-- DRIP reinvestment projection showing compounding
-- Ranked safety of this pick for long-term hold""",
-
-            "Bain (贝恩资深战略合伙人)": """You are a senior partner at Bain & Company. Provide a competitive landscape report:
-- Top competitors in the sector
-- Revenue and profit margin comparison
-- Competitive moat analysis (brand, cost, network, switching)
-- Management quality rating
-- Innovation pipeline and R&D spending (Use R&D Expense History)
-- Biggest threats to the sector (regulation, disruption, macro)
-- SWOT analysis""",
-
-            "Renaissance (文艺复兴量化研究员)": """You are a quantitative researcher at Renaissance Technologies. Identify hidden patterns:
-- Insider buying and selling patterns (use Insider_Percent)
-- Institutional ownership trend
-- Short interest analysis and squeeze potential (use Short_Ratio)
-- Price behavior around earnings (pre-run, post-gap patterns)
-- Statistical edge summary: what gives this stock a quantifiable advantage""",
-
-            "McKinsey (麦肯锡宏观合伙人)": """You are a senior partner at McKinsey's Global Institute. Analyze macro impacts:
-- Current interest rate environment and its impact on this specific asset
-- Inflation trend analysis and whether it benefits or suffers
-- US dollar strength impact (domestic vs international)
-- Global risk factors (geopolitics, trade wars, supply chains) affecting this company"""
+            "Goldman Sachs (高盛高级分析师)": "You are a senior equity analyst at Goldman Sachs. Analyze: P/E compared to sector, Revenue growth trend, Debt-to-equity, Dividend sustainability, Competitive moat rating, Bull/Bear case price targets, Risk rating (1-10), Entry/Stop-loss zones.",
+            "Morgan Stanley (大摩DCF估值VP)": "You are a VP at Morgan Stanley. Build a DCF perspective: Evaluate operating margins, Free cash flow calculations year by year, WACC implications (using Beta), and give a clear verdict.",
+            "Bridgewater (桥水资深风险官)": "You are a senior risk analyst at Bridgewater. Evaluate: Sector concentration risk, Interest rate sensitivity, Recession stress test (drawdown estimate), Liquidity risk, Single stock risk, and Hedging strategies.",
+            "JPMorgan (小摩财报策略师)": "You are a senior equity research analyst at JPMorgan. Deliver an earnings analysis: Last 4 quarters earnings vs estimates, Consensus estimates, Options implied move, Bull/Bear case price impact.",
+            "BlackRock (贝莱德配置)": "You are a senior portfolio strategist at BlackRock. Create an allocation plan: Core vs satellite positions, Expected annual return range, Expected maximum drawdown, Rebalancing schedule.",
+            "Citadel (城堡量化交易员)": "You are a quantitative trader at Citadel. Analyze: Trend direction, Support/resistance, Moving average (50/200), RSI/MACD readings, Ideal entry price/stop-loss, Risk-to-reward ratio.",
+            "Harvard (哈佛分红策略)": "You are the chief investment strategist for Harvard's endowment. Build a dividend perspective: Dividend yield, safety score (1-10), Payout ratio analysis, DRIP reinvestment projection.",
+            "Bain (贝恩资深战略合伙人)": "You are a senior partner at Bain & Company. Provide a competitive landscape report: Margin comparison, Moat analysis, Innovation pipeline (R&D), Biggest threats, SWOT analysis.",
+            "Renaissance (文艺复兴量化)": "You are a quant at Renaissance Technologies. Identify patterns: Insider buying/selling, Institutional ownership, Short interest and squeeze potential, Price behavior around earnings.",
+            "McKinsey (麦肯锡宏观)": "You are a senior partner at McKinsey. Analyze macro impacts: Current interest rate environment, Inflation trend, US dollar strength impact, Global risk factors."
         }
     }
 
+def get_day1_modules():
+    return {
+        "🧭 模块 1：核心基本面与新闻催化剂 (Fundamentals & Catalyst)": "系统性分析其商业模式、营收质量（通过现金流印证）。结合数据包中最新的 News_Catalysts（新闻事件），判断近 6 个月内可能引发股价重估的催化剂是什么？",
+        "🧮 模块 2：多维估值矩阵 (Valuation Matrix)": "综合评估其 EV/EBITDA 倍数、Rule of 40（营收增长+利润率）健康度、自由现金流。判断当前市场定价是计入了悲观预期还是透支了未来？",
+        "⚖️ 模块 3：投资哲学交叉验证 (Cross-Philosophies)": "用三大哲学交叉审视：1.老虎基金视角（基本面做多/做空的逻辑是什么？） 2. 橡树资本视角（当前价格具备足够的安全边际吗？） 3. 德鲁肯米勒视角（宏观流动性与行业趋势是顺风还是逆风？）",
+        "🚨 模块 4：事前尸检与行动计划 (Pre-Mortem & Action Plan)": "【反偏见核心排雷】请执行‘事前尸检’：假设该笔投资在 2 年后亏损了 50%，倒推最可能导致暴跌的 3 个致命原因。最后，给出极其明确的建仓策略（如观察哪些红旗指标，在什么支撑位建仓）。"
+    }
+
 # ==========================================
-# 5. AI 评估引擎 (动态视角 + 1500长文本输出)
+# 5. AI 评估引擎 (支持动态视角与货币校准)
 # ==========================================
-def get_ai_response(name, role_desc, data):
+def get_ai_response(name, role_desc, data, is_day1=False):
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+    
     asset_type = data.get('Meta', {}).get('Asset_Type', 'Unknown')
+    currency = data.get('Meta', {}).get('Currency', 'USD')
+    
+    # 货币单位校准提示
+    currency_prompt = f"【🚨极其重要】：该标的财务数据计价货币为 **{currency}**。请在分析绝对金额时，务必结合该国货币单位及当地宏观背景（如日本/韩国的汇率及通胀环境），避免将其当成美元产生估值幻觉。"
     
     try:
-        prompt = f"""
-        你现在是 {name}。
-        这是你的核心分析框架和任务要求：
-        {role_desc}
-        
-        【🚨极端重要指令】：当前评估的标的类型为 **{asset_type}**。
-        1. 如果是【Common Stock (股票)】，请严格执行你上述的财务分析/DCF模型。
-        2. 如果是【ETF / Fund (行业基金/宽基)】，请**立即转换视角**！把目标视为“一个投资组合”。基于它提供的 Top_5_Holdings、费率、股息率进行配置分析。
-        3. 如果是【Commodity / ETC (商品，如黄金GLD)】，请纯粹从实际利率、避险情绪、通胀预期及技术面的角度进行战略评估。
+        if not is_day1:
+            prompt = f"""
+            你现在是 {name}。任务要求：{role_desc}
+            
+            当前标的类型为 **{asset_type}**。{currency_prompt}
+            1. 若是【股票】，请严格执行上述财务/DCF分析。
+            2. 若是【ETF/基金】，请转换视角为投资组合配置（基于Top Holdings和费率分析）。
+            3. 若是【商品(如GLD)】，请忽略股权指标，纯粹从实际利率、避险及技术面评估。
 
-        请基于以下最新的彭博/EODHD 真实数据包进行深度分析（如果某数据缺失，基于常识推演，绝不要抱怨缺失）：
-        {json.dumps(data, ensure_ascii=False)}
-        
-        输出要求：
-        1. 必须使用**中文**回答。请将你的英文分析框架完美翻译为中文专业研报。
-        2. 利用具体数字支撑观点。排版使用 Markdown（加粗、列表）。
-        3. 【绝对要求】你必须在回答的最后，另起一行，单独列出评分，格式必须精确包含“评分：X/10”。
-        """
-        
+            请基于最新的彭博/EODHD数据进行分析：
+            {json.dumps(data, ensure_ascii=False)}
+            
+            要求：
+            1. 必须使用**中文**回答。利用具体数字支撑观点。
+            2. 排版使用 Markdown。
+            3. 【绝对要求】在回答的最后另起一行，单独列出评分，格式必须精确包含“评分：X/10”。
+            """
+        else:
+            prompt = f"""
+            你正在执行顶级对冲基金的【Day1 Global 深度投研框架】模块：{name}。
+            核心指令：{role_desc}
+            
+            当前标的类型为 **{asset_type}**。{currency_prompt}
+            
+            请基于全量数据（包含近期新闻、Rule of 40 等）：
+            {json.dumps(data, ensure_ascii=False)}
+            
+            要求：
+            1. 必须使用**中文**回答。直接输出结构化的高密度研报，拒绝废话。
+            2. 极度客观。大量使用数据包中的真实数字（如 EV/EBITDA, 新闻事件）作为论据。
+            3. 使用 Markdown 使得层级分明。
+            （Day1模块不需要给出最终评分）
+            """
+            
         resp = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4000, temperature=0.65, timeout=120 
+            max_tokens=4000, temperature=0.6, timeout=120 
         )
         content = resp.choices[0].message.content.strip()
         
-        score_match = re.search(r'评分[：:\s]*([0-9.]+)', content)
-        if score_match:
-            score = f"{score_match.group(1)}/10"
-            main_text = re.sub(r'【?评分[：:\s]*([0-9.]+).*', '', content, flags=re.IGNORECASE|re.DOTALL).strip()
+        if not is_day1:
+            score_match = re.search(r'评分[：:\s]*([0-9.]+)', content)
+            if score_match:
+                score = f"{score_match.group(1)}/10"
+                main_text = re.sub(r'【?评分[：:\s]*([0-9.]+).*', '', content, flags=re.IGNORECASE|re.DOTALL).strip()
+            else:
+                score = "未评"
+                main_text = content
+            return name, main_text, score
         else:
-            score = "未评"
-            main_text = content
+            return name, content, None
             
-        return name, main_text, score
     except Exception as e:
-        return name, f"⚠️ 评估失败或连接超时: {str(e)}", "Error"
+        return name, f"⚠️ 评估失败: {str(e)}", "Error"
 
 # ==========================================
 # 6. UI 主界面渲染
 # ==========================================
-st.title("🏆 Super Committee AI (满血部署版)")
-st.caption("22 位投资大师与华尔街专家 · 深度个股/ETF/商品全覆盖系统")
+st.title("🏆 Super Committee AI (Day1 Global 版)")
+st.caption("集成了 22 位大师研报与 Day1 Global 深度反偏见框架的全资产系统")
 st.markdown("---")
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    search_query = st.text_input("🔍 搜索标的 (输入代码或名称，如: AAPL, GLD, 600519)", placeholder="支持美股、A股、港股、ETF及加密货币")
+    search_query = st.text_input("🔍 搜索全球标的 (如: NVDA, 7203.T (丰田), 005930.KO (三星))", placeholder="支持美股、日韩、A/港股及ETF")
     
 selected_ticker = None
 if search_query:
@@ -352,60 +322,81 @@ if search_query:
     if search_results:
         selected_ticker = st.selectbox("🎯 请确认目标标的：", search_results).split(" | ")[0]
     else:
-        st.warning("未找到匹配标的，请检查拼写。")
+        st.warning("未找到匹配标的，请检查拼写或尝试添加市场后缀 (如 .T, .KO)")
 
-if st.button("🚀 启动全明星深度会诊") and selected_ticker:
-    with st.spinner(f"正在从 EODHD 提取 {selected_ticker} 深度财务报表与核心技术指标..."):
+if st.button("🚀 启动深度扫描") and selected_ticker:
+    with st.spinner(f"正在从 EODHD 提取 {selected_ticker} 深度财务、筹码与新闻数据..."):
         rich_data = fetch_comprehensive_data(selected_ticker)
     
     if rich_data:
-        st.success(f"✅ 数据提取成功！正在唤醒 22 位专家，请稍候 (预计需 10-30 秒)...")
+        currency = rich_data.get('Meta', {}).get('Currency', 'USD')
+        st.success(f"✅ 数据提取成功！(计价货币: **{currency}**)。正在唤醒全网模型...")
         
         experts = get_expert_prompts()
-        all_experts = {**experts["投资大师组"], **experts["投资专家组"]}
-        total_experts = len(all_experts)
+        day1_modules = get_day1_modules()
+        total_tasks = len(experts["投资大师组"]) + len(experts["投资专家组"]) + len(day1_modules)
         
-        tab_m, tab_i = st.tabs(["🌟 传奇投资大师 (12位)", "🏛️ 华尔街机构专家 (10位)"])
+        tab_m, tab_i, tab_day1 = st.tabs(["🌟 传奇大师意见 (12位)", "🏛️ 机构专家评估 (10位)", "🌐 Day1 深度投研 (反偏见)"])
         
         placeholders = {}
+        
+        # 布局分配
         with tab_m:
             cols_m = st.columns(2)
             for i, name in enumerate(experts["投资大师组"].keys()):
                 with cols_m[i%2]:
-                    placeholders[name] = st.container(height=550, border=True)
-                    placeholders[name].info(f"⏳ {name} 正在深度审阅...")
+                    placeholders[name] = {"ui": st.container(height=500, border=True), "is_day1": False}
+                    placeholders[name]["ui"].info(f"⏳ {name} 正在深度审阅...")
         
         with tab_i:
             cols_i = st.columns(2)
             for i, name in enumerate(experts["投资专家组"].keys()):
                 with cols_i[i%2]:
-                    placeholders[name] = st.container(height=550, border=True)
-                    placeholders[name].info(f"⏳ {name} 正在构建报告...")
+                    placeholders[name] = {"ui": st.container(height=500, border=True), "is_day1": False}
+                    placeholders[name]["ui"].info(f"⏳ {name} 正在构建报告...")
+                    
+        with tab_day1:
+            st.info("💡 **Day1 Global 投研框架** 专注于基本面重构、估值交叉验证与“事前尸检”防雷，为严肃决策提供支持。")
+            for name in day1_modules.keys():
+                placeholders[name] = {"ui": st.container(border=True), "is_day1": True}
+                placeholders[name]["ui"].info(f"⏳ {name} 正在计算并生成...")
 
         completed = 0
         progress_bar = st.progress(0)
         status_text = st.empty()
         
+        # 并发执行所有 26 个任务
         with ThreadPoolExecutor(max_workers=15) as executor:
-            futures =[executor.submit(get_ai_response, name, desc, rich_data) for name, desc in all_experts.items()]
+            futures = []
+            for name, desc in experts["投资大师组"].items():
+                futures.append(executor.submit(get_ai_response, name, desc, rich_data, False))
+            for name, desc in experts["投资专家组"].items():
+                futures.append(executor.submit(get_ai_response, name, desc, rich_data, False))
+            for name, desc in day1_modules.items():
+                futures.append(executor.submit(get_ai_response, name, desc, rich_data, True))
             
             for future in as_completed(futures):
                 name, text, score = future.result()
                 completed += 1
                 
-                progress_pct = int((completed / total_experts) * 100)
-                progress_bar.progress(progress_pct)
-                status_text.markdown(f"**⚡ 评估进行中: {completed}/{total_experts} 个专家已出具意见...**")
+                progress_bar.progress(completed / total_tasks)
+                status_text.markdown(f"**⚡ 评估进行中: {completed}/{total_tasks} 个模块已完成...**")
                 
-                with placeholders[name]:
-                    placeholders[name].empty()
-                    st.markdown(f"<h3 class='expert-title'>👤 {name}</h3>", unsafe_allow_html=True)
-                    st.markdown(text)
-                    
-                    score_color = "#d32f2f" if score in ["未评", "Error"] else "#1565C0"
-                    st.markdown(f"<hr style='margin: 10px 0;'><div class='score-badge' style='color:{score_color}'>🎯 评分：{score}</div>", unsafe_allow_html=True)
+                is_day1 = placeholders[name]["is_day1"]
+                ui = placeholders[name]["ui"]
+                
+                with ui:
+                    ui.empty()
+                    if is_day1:
+                        st.markdown(f"<h3 class='day1-title'>{name}</h3>", unsafe_allow_html=True)
+                        st.markdown(text)
+                    else:
+                        st.markdown(f"<h3 class='expert-title'>👤 {name}</h3>", unsafe_allow_html=True)
+                        st.markdown(text)
+                        color = "#d32f2f" if score in ["未评", "Error"] else "#1565C0"
+                        st.markdown(f"<hr style='margin:10px 0;'><div class='score-badge' style='color:{color}'>🎯 评分：{score}</div>", unsafe_allow_html=True)
         
-        status_text.success(f"✅ 评估完成！全部 {total_experts} 位大师与专家的意见已出具。")
+        status_text.success(f"✅ 全盘扫描完成！请在上方切换标签页查阅报告。")
         progress_bar.empty()
     else:
-        st.error("数据抓取失败，可能原因：代码不正确、API额度耗尽、或该公司无可用基本面数据。")
+        st.error("数据抓取失败，请检查 API 额度或标的代码。")
