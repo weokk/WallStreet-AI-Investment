@@ -9,7 +9,7 @@ from openai import OpenAI
 # ==========================================
 # 1. 页面配置与 CSS 样式
 # ==========================================
-st.set_page_config(page_title="Super Committee AI V1 (Max Data)", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="Super Committee AI V1", layout="wide", page_icon="🏦")
 
 st.markdown("""
     <style>
@@ -51,37 +51,40 @@ except Exception as e:
 # 3. 核心数据引擎 (智能搜索与防弹解析)
 # ==========================================
 def search_ticker(query):
-    """增强版智能搜索：自动剥离后缀并置顶目标市场"""
-    if not query or not EODHD_API_KEY: return[]
+    """增强版智能搜索：彻底修复 404 切割错误，并扩大搜索池"""
+    if not query or not EODHD_API_KEY: return []
     
     query = query.upper().strip()
     results =[]
     
-    # 1. 强制压入精确输入直达
+    # 1. 强制压入精确输入直达 (注意这里的 | 前后都有空格，格式非常干净)
     if '.' in query:
-        results.append(f"{query} |[精确输入直达/Direct Override]")
+        results.append(f"{query} | [强制精确抓取]")
         
-    # 2. 剥离后缀进行全网搜索 (如 1605.T 剥离为 1605)
     base_query = query.split('.')[0] if '.' in query else query
     target_exchange = query.split('.')[1] if '.' in query else None
     
-    url = f"https://eodhd.com/api/search/{base_query}?api_token={EODHD_API_KEY}&limit=30&fmt=json"
+    # 扩大 limit 到 50，尽力捞出冷门市场同名股
+    url = f"https://eodhd.com/api/search/{base_query}?api_token={EODHD_API_KEY}&limit=50&fmt=json"
     try:
         res = requests.get(url, timeout=5).json()
         if not isinstance(res, list): return results
         
-        # 3. 智能排序：如果用户带了后缀，把该后缀市场的股票提到最前面
         for item in res:
             asset_type = item.get('Type', 'Unknown')
             exchange = item.get('Exchange', '')
             code_str = f"{item.get('Code')}.{exchange} | {item.get('Name')} ({asset_type})"
             
+            # 如果匹配到目标交易所，放到前面 (紧跟直达选项)
             if target_exchange and target_exchange == exchange:
-                results.insert(1, code_str) # 紧跟在 [直达] 后面
+                if len(results) > 0 and "[强制精确抓取]" in results[0]:
+                    results.insert(1, code_str)
+                else:
+                    results.insert(0, code_str)
             else:
                 results.append(code_str)
                 
-        # 去重并保持顺序
+        # 去重
         seen = set()
         final_res =[]
         for x in results:
@@ -89,12 +92,12 @@ def search_ticker(query):
                 seen.add(x)
                 final_res.append(x)
                 
-        return final_res[:20] # 扩大展示数量到 20 个
+        return final_res[:20]
     except Exception as e:
         return results
 
 def safe_dict(data, key):
-    """【核心修复】绝对防弹的数据提取器，防止日韩股票 API 返回空列表导致崩溃"""
+    """绝对防弹的数据提取器，防止日韩股票 API 返回空列表导致崩溃"""
     if isinstance(data, dict):
         val = data.get(key)
         if isinstance(val, dict): return val
@@ -107,17 +110,15 @@ def fetch_comprehensive_data(ticker_code):
         res_raw = requests.get(url_fund, timeout=15)
         
         if res_raw.status_code != 200:
-            return None, f"HTTP Error {res_raw.status_code}: {res_raw.text}"
+            return None, f"HTTP Error {res_raw.status_code}: 无法在 EODHD 找到该代码 ({ticker_code}) 的基本面数据。"
             
         res = res_raw.json()
         if not isinstance(res, dict):
-            return None, f"API 返回了异常的非字典格式: {str(res)[:100]}"
+            return None, f"API 返回了异常的非字典格式"
             
-        # 错误信息拦截 (如果用户订阅套餐不支持该股票)
         if 'message' in res and 'General' not in res:
             return None, f"EODHD 拦截: {res['message']}"
 
-        # 使用防弹提取器
         g = safe_dict(res, 'General')
         h = safe_dict(res, 'Highlights')
         v = safe_dict(res, 'Valuation')
@@ -126,9 +127,8 @@ def fetch_comprehensive_data(ticker_code):
         
         asset_type = g.get('Type', 'Common Stock')
         
-        # 获取 RSI / MACD
         latest_rsi, latest_macd = "N/A", "N/A"
-        if asset_type in['Common Stock', 'ETF']:
+        if asset_type in ['Common Stock', 'ETF']:
             try:
                 url_rsi = f"https://eodhd.com/api/technical/{ticker_code}?function=rsi&period=14&api_token={EODHD_API_KEY}&fmt=json"
                 rsi_data = requests.get(url_rsi, timeout=5).json()
@@ -157,8 +157,7 @@ def fetch_comprehensive_data(ticker_code):
             }
         }
 
-        # ETF 分支
-        if asset_type in['ETF', 'Fund', 'Mutual Fund']:
+        if asset_type in ['ETF', 'Fund', 'Mutual Fund']:
             etf_data = safe_dict(res, 'ETF_Data')
             top_10 = safe_dict(etf_data, 'Top_10_Holdings')
             packet["ETF_Specifics"] = {
@@ -167,7 +166,6 @@ def fetch_comprehensive_data(ticker_code):
                 "Top_5_Holdings": {k: safe_dict(top_10, k).get('Assets_%') for k in list(top_10.keys())[:5]} if top_10 else "N/A"
             }
             
-        # 股票分支
         elif asset_type == 'Common Stock':
             earnings = safe_dict(res, 'Earnings')
             earnings_hist = safe_dict(earnings, 'History')
@@ -297,7 +295,9 @@ selected_ticker = None
 if search_query:
     search_results = search_ticker(search_query)
     if search_results:
-        selected_ticker = st.selectbox("🎯 请确认目标标的：", search_results).split(" | ")[0]
+        choice = st.selectbox("🎯 请确认目标标的：", search_results)
+        # 【核心修复】：最暴力、最安全的字符串切割，确保 API 只收到纯净的代码
+        selected_ticker = choice.split("|")[0].strip()
     else:
         st.warning("未找到匹配标的，请检查拼写。提示：日股请加 .T，韩股请加 .KO")
 
@@ -350,7 +350,7 @@ if st.button("🚀 启动全明星深度会诊") and selected_ticker:
                     st.markdown(f"<h3 class='expert-title'>👤 {name}</h3>", unsafe_allow_html=True)
                     st.markdown(text)
                     
-                    score_color = "#d32f2f" if score in["未评", "Error"] else "#1565C0"
+                    score_color = "#d32f2f" if score in ["未评", "Error"] else "#1565C0"
                     st.markdown(f"<hr style='margin: 10px 0;'><div class='score-badge' style='color:{score_color}'>🎯 评分：{score}</div>", unsafe_allow_html=True)
         
         status_text.success(f"✅ 评估完成！全部 {total_experts} 位大师与专家的意见已出具。")
