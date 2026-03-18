@@ -48,77 +48,77 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# 3. 核心数据引擎 (智能搜索与防弹解析)
+# 3. 核心引擎：强化搜索与防断裂解析
 # ==========================================
 def search_ticker(query):
-    """增强版智能搜索：彻底修复 404 切割错误，并扩大搜索池"""
+    """超级搜索：不仅搜索代码，还展示交易所全名，并自动去重"""
     if not query or not EODHD_API_KEY: return []
     
     query = query.upper().strip()
-    results =[]
+    # 自动处理带点号的输入，如 1605.T -> 搜索 1605
+    base_query = query.split('.')[0]
     
-    # 1. 强制压入精确输入直达 (注意这里的 | 前后都有空格，格式非常干净)
-    if '.' in query:
-        results.append(f"{query} | [强制精确抓取]")
-        
-    base_query = query.split('.')[0] if '.' in query else query
-    target_exchange = query.split('.')[1] if '.' in query else None
-    
-    # 扩大 limit 到 50，尽力捞出冷门市场同名股
     url = f"https://eodhd.com/api/search/{base_query}?api_token={EODHD_API_KEY}&limit=50&fmt=json"
+    results = []
+    
+    # 强制直达项
+    if '.' in query:
+        results.append(f"{query} | [强制精确尝试/Direct Try]")
+
     try:
         res = requests.get(url, timeout=5).json()
-        if not isinstance(res, list): return results
-        
-        for item in res:
-            asset_type = item.get('Type', 'Unknown')
-            exchange = item.get('Exchange', '')
-            code_str = f"{item.get('Code')}.{exchange} | {item.get('Name')} ({asset_type})"
-            
-            # 如果匹配到目标交易所，放到前面 (紧跟直达选项)
-            if target_exchange and target_exchange == exchange:
-                if len(results) > 0 and "[强制精确抓取]" in results[0]:
-                    results.insert(1, code_str)
-                else:
-                    results.insert(0, code_str)
-            else:
-                results.append(code_str)
-                
-        # 去重
-        seen = set()
-        final_res =[]
-        for x in results:
-            if x not in seen:
-                seen.add(x)
-                final_res.append(x)
-                
-        return final_res[:20]
-    except Exception as e:
+        if isinstance(res, list):
+            for item in res:
+                code = item.get('Code', '')
+                exchange = item.get('Exchange', '')
+                name = item.get('Name', '')
+                asset_type = item.get('Type', 'Unknown')
+                # 组合显示：代码.交易所 | 公司名 (交易所全名)
+                display_str = f"{code}.{exchange} | {name} ({exchange})"
+                if display_str not in results:
+                    results.append(display_str)
+        return results[:30] # 返回更多结果供选择
+    except:
         return results
 
 def safe_dict(data, key):
-    """绝对防弹的数据提取器，防止日韩股票 API 返回空列表导致崩溃"""
     if isinstance(data, dict):
         val = data.get(key)
         if isinstance(val, dict): return val
     return {}
 
 def fetch_comprehensive_data(ticker_code):
-    """满血全量数据抓取：包含防崩溃机制"""
-    try:
-        url_fund = f"https://eodhd.com/api/fundamentals/{ticker_code}?api_token={EODHD_API_KEY}&fmt=json"
-        res_raw = requests.get(url_fund, timeout=15)
-        
-        if res_raw.status_code != 200:
-            return None, f"HTTP Error {res_raw.status_code}: 无法在 EODHD 找到该代码 ({ticker_code}) 的基本面数据。"
-            
-        res = res_raw.json()
-        if not isinstance(res, dict):
-            return None, f"API 返回了异常的非字典格式"
-            
-        if 'message' in res and 'General' not in res:
-            return None, f"EODHD 拦截: {res['message']}"
+    """满血版抓取：增加备用后缀重试机制与详细权限报错"""
+    # 备用后缀映射
+    backup_suffixes = {".T": ".TSE", ".TSE": ".T"}
+    
+    def try_fetch(code):
+        url = f"https://eodhd.com/api/fundamentals/{code}?api_token={EODHD_API_KEY}&fmt=json"
+        return requests.get(url, timeout=15)
 
+    res_raw = try_fetch(ticker_code)
+    
+    # 如果 404，尝试备用后缀
+    if res_raw.status_code == 404:
+        for old, new in backup_suffixes.items():
+            if ticker_code.endswith(old):
+                new_code = ticker_code.replace(old, new)
+                res_raw = try_fetch(new_code)
+                if res_raw.status_code == 200:
+                    ticker_code = new_code
+                    break
+
+    if res_raw.status_code != 200:
+        error_msg = f"HTTP {res_raw.status_code}: "
+        if res_raw.status_code == 404:
+            error_msg += f"在 EODHD 库中找不到代码 {ticker_code}。这通常意味着您的 API 套餐不支持该国家市场（如日本或台湾）。"
+        elif res_raw.status_code == 403:
+            error_msg += "API Key 权限受限或额度已耗尽。"
+        return None, error_msg
+
+    try:
+        res = res_raw.json()
+        # 后续解析逻辑 (保持 safe_dict 容错)
         g = safe_dict(res, 'General')
         h = safe_dict(res, 'Highlights')
         v = safe_dict(res, 'Valuation')
@@ -127,78 +127,27 @@ def fetch_comprehensive_data(ticker_code):
         
         asset_type = g.get('Type', 'Common Stock')
         
+        # 技术指标
         latest_rsi, latest_macd = "N/A", "N/A"
         if asset_type in ['Common Stock', 'ETF']:
             try:
-                url_rsi = f"https://eodhd.com/api/technical/{ticker_code}?function=rsi&period=14&api_token={EODHD_API_KEY}&fmt=json"
-                rsi_data = requests.get(url_rsi, timeout=5).json()
-                if isinstance(rsi_data, list) and rsi_data: latest_rsi = round(rsi_data[-1].get('rsi', 0), 2)
-                
-                url_macd = f"https://eodhd.com/api/technical/{ticker_code}?function=macd&api_token={EODHD_API_KEY}&fmt=json"
-                macd_data = requests.get(url_macd, timeout=5).json()
-                if isinstance(macd_data, list) and macd_data: 
-                    latest_macd = {"MACD_Value": round(macd_data[-1].get('macd', 0), 4), "Signal_Line": round(macd_data[-1].get('signal', 0), 4)}
+                rsi_data = requests.get(f"https://eodhd.com/api/technical/{ticker_code}?function=rsi&api_token={EODHD_API_KEY}&fmt=json").json()
+                if rsi_data: latest_rsi = rsi_data[-1].get('rsi', "N/A")
+                macd_data = requests.get(f"https://eodhd.com/api/technical/{ticker_code}?function=macd&api_token={EODHD_API_KEY}&fmt=json").json()
+                if macd_data: latest_macd = macd_data[-1]
             except: pass
 
         packet = {
-            "Meta": {
-                "Asset_Type": asset_type,
-                "Currency": g.get('CurrencyCode', 'USD'),
-                "Sector": g.get('Sector'), "Industry": g.get('Industry'),
-                "Description": str(g.get('Description', ''))[:400]
-            },
-            "Valuation_&_Profitability": {
-                "PE": v.get('TrailingPE'), "Forward_PE": v.get('ForwardPE'),
-                "ROE": h.get('ReturnOnEquityTTM'), "Operating_Margin": h.get('OperatingMarginTTM')
-            },
-            "Technicals_&_Risk": {
-                "Beta": t.get('Beta'), "50_Day_MA": t.get('50DayMA'), "200_Day_MA": t.get('200DayMA'),
-                "Short_Ratio": t.get('ShortRatio'), "RSI_14Day": latest_rsi, "MACD_Latest": latest_macd
+            "Meta": {"Asset_Type": asset_type, "Currency": g.get('CurrencyCode', 'USD'), "Name": g.get('Name'), "Sector": g.get('Sector'), "Desc": str(g.get('Description', ''))[:400]},
+            "Valuation": {"PE": v.get('TrailingPE'), "ROE": h.get('ReturnOnEquityTTM')},
+            "Technicals": {"Beta": t.get('Beta'), "RSI": latest_rsi, "MACD": latest_macd},
+            "Stock_Specifics": {
+                "Revenue_History_5Y": {k: v.get('totalRevenue') for k, v in list(safe_dict(safe_dict(res, 'Financials'), 'Income_Statement').get('yearly', {}).items())[:5]},
+                "Free_Cash_Flow_History_3Y": {k: v.get('freeCashFlow') for k, v in list(safe_dict(safe_dict(res, 'Financials'), 'Cash_Flow').get('yearly', {}).items())[:3]},
             }
         }
-
-        if asset_type in ['ETF', 'Fund', 'Mutual Fund']:
-            etf_data = safe_dict(res, 'ETF_Data')
-            top_10 = safe_dict(etf_data, 'Top_10_Holdings')
-            packet["ETF_Specifics"] = {
-                "Expense_Ratio": etf_data.get('NetExpenseRatio'),
-                "Yield": etf_data.get('Yield'),
-                "Top_5_Holdings": {k: safe_dict(top_10, k).get('Assets_%') for k in list(top_10.keys())[:5]} if top_10 else "N/A"
-            }
-            
-        elif asset_type == 'Common Stock':
-            earnings = safe_dict(res, 'Earnings')
-            earnings_hist = safe_dict(earnings, 'History')
-            recent_earnings = dict(list(earnings_hist.items())[:4]) if earnings_hist else "N/A"
-            
-            earnings_trend = safe_dict(earnings, 'Trend')
-            fwd_estimates = dict(list(earnings_trend.items())[:2]) if earnings_trend else "N/A"
-            
-            financials = safe_dict(res, 'Financials')
-            cash_flow = safe_dict(financials, 'Cash_Flow')
-            yearly_cf = safe_dict(cash_flow, 'yearly')
-            recent_fcf = {k: safe_dict(yearly_cf, k).get('freeCashFlow') for k in list(yearly_cf.keys())[:3]} if yearly_cf else "N/A"
-
-            income_stmt = safe_dict(financials, 'Income_Statement')
-            yearly_inc = safe_dict(income_stmt, 'yearly')
-            rev_5yr, rnd_5yr = {}, {}
-            for k in list(yearly_inc.keys())[:5]:
-                rev_5yr[k] = safe_dict(yearly_inc, k).get('totalRevenue')
-                rnd_5yr[k] = safe_dict(yearly_inc, k).get('researchDevelopment')
-
-            packet["Stock_Specifics"] = {
-                "Debt_To_Equity": h.get('NetDebtToEquity'),
-                "Dividend_Yield": h.get('DividendYield'),
-                "Institutional_Percent": s.get('InstitutionsPercent'),
-                "Free_Cash_Flow_History_3Y": recent_fcf,             
-                "Revenue_History_5Y": rev_5yr,                       
-                "R&D_Expense_History_5Y": rnd_5yr,                   
-                "Earnings_Beat_Miss_Last_4Q": recent_earnings,       
-                "Forward_Consensus_Estimates": fwd_estimates     
-            }
-            
         return packet, None
-    except Exception as e:
+    except Exception:
         return None, traceback.format_exc()
 
 # ==========================================
