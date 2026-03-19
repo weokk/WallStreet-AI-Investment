@@ -339,7 +339,7 @@ def get_day1_modules():
         "🧭 模块 1：核心基本面与催化剂 (Fundamentals & Catalyst)": "系统性分析其商业模式、营收质量（通过现金流印证）。判断近 6 个月内可能引发股价重估的催化剂是什么？",
         "🧮 模块 2：多维估值矩阵 (Valuation Matrix)": "综合评估其 EV/EBITDA 倍数、Rule of 40（营收增长+利润率）健康度、自由现金流。判断当前市场定价是计入了悲观预期还是透支了未来？",
         "⚖️ 模块 3：投资哲学交叉验证 (Cross-Philosophies)": "用三大哲学交叉审视：1.老虎基金视角（基本面做多/做空的逻辑是什么？） 2. 橡树资本视角（当前价格具备足够的安全边际吗？） 3. 德鲁肯米勒视角（宏观流动性与行业趋势是顺风还是逆风？）",
-        "🚨 模块 4：事前尸检与行动计划 (Pre-Mortem & Action Plan)": "【反偏见核心排雷】请执行‘事前尸检’：假设该笔投资在 2 年后亏损了 50%，倒推最可能导致暴跌的 3 个致命原因。最后，给出极其明确的建仓策略（如观察哪些红旗指标，在什么支撑位建仓）。"
+        "🚨 模块 4：事前检查与行动计划 (Pre-Check & Action Plan)": "【反偏见核心排雷】请执行‘事前检查’：假设该笔投资在 2 年后亏损了 50%，倒推最可能导致暴跌的 3 个致命原因。最后，给出极其明确的建仓策略（如观察哪些红旗指标，在什么支撑位建仓）。"
     }
 
 # ==========================================
@@ -410,7 +410,7 @@ def get_ai_response(name, role_desc, data, is_day1=False):
 # 7. UI 主界面渲染
 # ==========================================
 st.title("🏆 Super Committee AI (双擎防弹版)")
-st.caption("22 位投资大师与 Day1 框架 · 完美支持日本/韩国/中国及欧美全市场")
+st.caption("22 位投资大师与投研框架 · 完美支持日本/韩国/中国及欧美全市场")
 st.markdown("---")
 
 col1, col2 = st.columns([3, 1])
@@ -439,7 +439,7 @@ if st.button("🚀 启动全维度深度扫描") and selected_ticker:
         day1_modules = get_day1_modules()
         total_tasks = len(experts["投资大师组"]) + len(experts["投资专家组"]) + len(day1_modules)
         
-        tab_m, tab_i, tab_day1 = st.tabs(["🌟 传奇大师意见 (12位)", "🏛️ 机构专家评估 (10位)", "🌐 Day1 深度投研 (4大模块)"])
+        tab_m, tab_i, tab_day1 = st.tabs(["🌟 传奇大师意见 (12位)", "🏛️ 机构专家评估 (10位)", "🌐 深度投研 (4大模块)"])
         
         placeholders = {}
         with tab_m:
@@ -457,7 +457,7 @@ if st.button("🚀 启动全维度深度扫描") and selected_ticker:
                     placeholders[name]["ui"].info(f"⏳ {name} 正在构建报告...")
                     
         with tab_day1:
-            st.info("💡 **Day1 Global 投研框架** 专注于基本面重构、估值交叉验证与“事前尸检”防雷。")
+            st.info("💡 **Day1 Global 投研框架** 专注于基本面重构、估值交叉验证与“事前检查”防雷。")
             for name in day1_modules.keys():
                 placeholders[name] = {"ui": st.container(border=True), "is_day1": True}
                 placeholders[name]["ui"].info(f"⏳ {name} 正在计算并生成...")
