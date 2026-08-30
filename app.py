@@ -387,7 +387,8 @@ def get_ai_response(name, role_desc, data, is_day1=False):
         resp = client.chat.completions.create(
             model="deepseek-v4-flash",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4000, temperature=0.6, timeout=120 
+            max_tokens=4000, temperature=0.6, timeout=120,
+            extra_body={"thinking": {"type": "disabled"}}
         )
         content = resp.choices[0].message.content.strip()
         
