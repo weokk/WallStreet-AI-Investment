@@ -385,7 +385,7 @@ def get_ai_response(name, role_desc, data, is_day1=False):
             """
             
         resp = client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-flash",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=4000, temperature=0.6, timeout=120 
         )
